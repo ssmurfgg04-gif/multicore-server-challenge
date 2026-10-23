@@ -57,12 +57,12 @@ jobs:
       - name: loadgen build
         run: (cd bench && go build -o /tmp/loadgen ./cmd/loadgen)
       - name: warm-up (300 users)
-        run: /tmp/loadgen run -target http://127.0.0.1:3000 -users 300 -ramp 20s -measure 40s -articles 10000 -run-id warm-github -out /tmp/warm.json 2>&1 | tail -20
+        run: /tmp/loadgen run -target http://127.0.0.1:3000 -users 300 -ramp 20s -measure 40s -articles 10000 -run-id warm-github -secret "$JWT_SECRET" -out /tmp/warm.json 2>&1 | tail -20
       - name: probe (${{ matrix.users }} users)
         run: |
           /tmp/loadgen run -target http://127.0.0.1:3000 -users ${{ matrix.users }} \
             -ramp 45s -measure 90s -articles 10000 -run-id gh-${{ matrix.users }} \
-            -out /tmp/results.json 2>&1 | tail -40
+            -secret "$JWT_SECRET" -out /tmp/results.json 2>&1 | tail -40
       - name: verdict
         run: |
           jq '{users: .meta.users, rps: .merged.rps, pass: .merged.pass, lg_limited: .merged.lg_limited,
