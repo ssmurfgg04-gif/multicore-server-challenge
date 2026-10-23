@@ -118,15 +118,15 @@ static void value(jp_t *j, jt_t *t, const char **v, const char **ve)
     }
     if (c == 't') {
         if (j->e - j->p < 4 || memcmp(j->p, "true", 4)) { j->bad = 1; return; }
-        j->p += 4; *t = JT_OTHER; return;
+        j->p += 4; *t = JT_BOOL; return;
     }
     if (c == 'f') {
         if (j->e - j->p < 5 || memcmp(j->p, "false", 5)) { j->bad = 1; return; }
-        j->p += 5; *t = JT_OTHER; return;
+        j->p += 5; *t = JT_BOOL; return;
     }
     if (c == 'n') {
         if (j->e - j->p < 4 || memcmp(j->p, "null", 4)) { j->bad = 1; return; }
-        j->p += 4; *t = JT_OTHER; return;
+        j->p += 4; *t = JT_NULL; return;
     }
     number(j, v, ve);
     *t = JT_NUMBER;

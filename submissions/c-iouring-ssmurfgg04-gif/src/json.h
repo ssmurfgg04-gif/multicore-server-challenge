@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum { JT_NONE = 0, JT_STRING, JT_NUMBER, JT_OTHER } jt_t;
+typedef enum { JT_NONE = 0, JT_STRING, JT_NUMBER, JT_NULL, JT_BOOL, JT_OTHER } jt_t;
 
 typedef struct {
     const char *name;   /* field to look for */

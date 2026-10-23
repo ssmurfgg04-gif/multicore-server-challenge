@@ -627,18 +627,26 @@ static const char *body_obj(req_t *r, const char *wrap, size_t *n)
     return f[0].v;
 }
 
-static span_t obj_str(req_t *r, const char *s, size_t n, const char *key, int *present)
+/* Extract a named string field. *state: 0 = absent or null (unchanged),
+ * 1 = string (span valid, may be empty), -1 = present but not a string. */
+static span_t obj_str(req_t *r, const char *s, size_t n, const char *key, int *state)
 {
     jfield_t f[1] = { { .name = key } };
     span_t out = { 0 };
-    if (json_fields(s, n, f, 1) != JT_OTHER || f[0].type != JT_STRING) {
-        if (present) *present = f[0].type != JT_NONE;
+    if (state) *state = 0;
+    if (json_fields(s, n, f, 1) != JT_OTHER) return out;
+    if (f[0].type == JT_NONE || f[0].type == JT_NULL) return out; /* absent */
+    if (f[0].type != JT_STRING) {
+        if (state) *state = -1;
         return out;
     }
-    if (present) *present = 1;
+    if (state) *state = 1;
     char *d = arena_alloc(r, (size_t)(f[0].ve - f[0].v) + 1);
     size_t dl = j_unescape(f[0].v, f[0].ve, d);
-    if (dl == (size_t)-1) return out;
+    if (dl == (size_t)-1) {
+        if (state) *state = -1;
+        return out;
+    }
     out.p = d;
     out.n = (uint32_t)dl;
     return out;
@@ -1002,6 +1010,7 @@ void route(req_t *r)
             span_t email = uo ? obj_str(r, uo, n, "email", NULL) : (span_t){ 0 };
             span_t pw = uo ? obj_str(r, uo, n, "password", NULL) : (span_t){ 0 };
             if (!nonempty(un) || !nonempty(email) || !nonempty(pw)) return reply_err(r, 422);
+            if (pw.n > 72) return reply_err(r, 422); /* Go's bcrypt: password too long */
             bcrypt_job_t *j = arena_alloc(r, sizeof *j);
             memset(j, 0, sizeof *j);
             j->mode = BCRYPT_HASH;
@@ -1034,18 +1043,23 @@ void route(req_t *r)
             if (!need_auth(r)) return;
             size_t n;
             const char *uo = body_obj(r, "user", &n);
-            int has_email = 0, has_un = 0, has_pw = 0;
-            span_t email = uo ? obj_str(r, uo, n, "email", &has_email) : (span_t){ 0 };
-            span_t un = uo ? obj_str(r, uo, n, "username", &has_un) : (span_t){ 0 };
-            span_t pw = uo ? obj_str(r, uo, n, "password", &has_pw) : (span_t){ 0 };
-            span_t bio = uo ? obj_str(r, uo, n, "bio", NULL) : (span_t){ 0 };
-            span_t image = uo ? obj_str(r, uo, n, "image", NULL) : (span_t){ 0 };
-            /* empty-string values are kept (only null/absent mean unchanged) */
-            r->upd_email = has_email ? span_dup(r, email) : NULL;
-            r->upd_username = has_un ? span_dup(r, un) : NULL;
-            r->upd_bio = bio.p ? span_dup(r, bio) : NULL;
-            r->upd_image = image.p ? span_dup(r, image) : NULL;
-            if (has_pw && pw.p) {
+            if (!uo) return reply_err(r, 422);
+            int st_email = 0, st_un = 0, st_pw = 0, st_bio = 0, st_image = 0;
+            span_t email = obj_str(r, uo, n, "email", &st_email);
+            span_t un = obj_str(r, uo, n, "username", &st_un);
+            span_t pw = obj_str(r, uo, n, "password", &st_pw);
+            span_t bio = obj_str(r, uo, n, "bio", &st_bio);
+            span_t image = obj_str(r, uo, n, "image", &st_image);
+            if (st_email < 0 || st_un < 0 || st_pw < 0 || st_bio < 0 || st_image < 0)
+                return reply_err(r, 422);
+            if ((st_email == 1 && !nonempty(email)) || (st_un == 1 && !nonempty(un)))
+                return reply_err(r, 422);
+            /* null/absent mean unchanged; empty-string email/username are 422 */
+            r->upd_email = st_email == 1 ? span_dup(r, email) : NULL;
+            r->upd_username = st_un == 1 ? span_dup(r, un) : NULL;
+            r->upd_bio = st_bio == 1 ? span_dup(r, bio) : NULL;
+            r->upd_image = st_image == 1 ? span_dup(r, image) : NULL;
+            if (st_pw == 1) {
                 bcrypt_job_t *j = arena_alloc(r, sizeof *j);
                 memset(j, 0, sizeof *j);
                 j->mode = BCRYPT_HASH;
@@ -1059,6 +1073,8 @@ void route(req_t *r)
                 if (pl > 72 || !ascii_only(j->pw, pl)) j->fallback = 1;
                 r->pending = 1;
                 bcrypt_submit(j);
+            } else if (st_pw < 0) {
+                return reply_err(r, 422);
             } else {
                 cb_user_put_hashed(&(bcrypt_job_t){ .req = r, .hash = "" });
             }
@@ -1108,15 +1124,15 @@ void route(req_t *r)
             snprintf(lim, sizeof lim, "%d", limit);
             snprintf(off, sizeof off, "%d", offset);
             const char *common[4] = { int64_span(r, r->viewer), lim, off, NULL };
-            if (tag.p) {
+            if (tag.n) {
                 common[3] = span_dup(r, tag);
                 pg_add(r, ST_LIST_TAG, 4, common);
                 pg_add(r, ST_LIST_TAG_COUNT, 1, (const char *[]){ common[3] });
-            } else if (author.p) {
+            } else if (author.n) {
                 common[3] = span_dup(r, author);
                 pg_add(r, ST_LIST_AUTHOR, 4, common);
                 pg_add(r, ST_LIST_AUTHOR_COUNT, 1, (const char *[]){ common[3] });
-            } else if (fav.p) {
+            } else if (fav.n) {
                 common[3] = span_dup(r, fav);
                 pg_add(r, ST_LIST_FAV, 4, common);
                 pg_add(r, ST_LIST_FAV_COUNT, 1, (const char *[]){ common[3] });
@@ -1146,10 +1162,13 @@ void route(req_t *r)
             if (!need_auth(r)) return;
             size_t n;
             const char *ao = body_obj(r, "article", &n);
-            span_t title = ao ? obj_str(r, ao, n, "title", NULL) : (span_t){ 0 };
-            span_t desc = ao ? obj_str(r, ao, n, "description", NULL) : (span_t){ 0 };
-            span_t body = ao ? obj_str(r, ao, n, "body", NULL) : (span_t){ 0 };
-            if (!nonempty(title) || !nonempty(desc) || !nonempty(body))
+            if (!ao) return reply_err(r, 422);
+            int st_t = 0, st_d = 0, st_b = 0;
+            span_t title = obj_str(r, ao, n, "title", &st_t);
+            span_t desc = obj_str(r, ao, n, "description", &st_d);
+            span_t body = obj_str(r, ao, n, "body", &st_b);
+            if (st_t != 1 || st_d != 1 || st_b != 1 ||
+                !nonempty(title) || !nonempty(desc) || !nonempty(body))
                 return reply_err(r, 422);
             r->art_title = span_dup(r, title);
             r->art_desc = span_dup(r, desc);
@@ -1157,11 +1176,14 @@ void route(req_t *r)
             pg_add(r, ST_ART_INS, 4,
                    (const char *[]){ int64_span(r, r->viewer), r->art_title, r->art_desc,
                                      r->art_body });
-            /* tags: optional array of non-empty strings */
+            /* tags: optional array of non-empty strings; null means absent;
+             * anything else that is not an array is a 422 */
             int ntags = 0;
             if (ao) {
                 jfield_t tf[1] = { { .name = "tagList" } };
-                if (json_fields(ao, n, tf, 1) == JT_OTHER && tf[0].type == JT_OTHER) {
+                json_fields(ao, n, tf, 1);
+                if (tf[0].type != JT_NONE && tf[0].type != JT_NULL) {
+                    if (tf[0].type != JT_OTHER) return reply_err(r, 422);
                     jfield_t els[64];
                     int cnt = json_array(tf[0].v, (size_t)(tf[0].ve - tf[0].v), els, 64);
                     if (cnt < 0) return reply_err(r, 422);
@@ -1215,13 +1237,18 @@ void route(req_t *r)
                 if (!need_auth(r)) return;
                 size_t n;
                 const char *ao = body_obj(r, "article", &n);
+                if (!ao) return reply_err(r, 422);
                 int ht = 0, hd = 0, hb = 0;
-                span_t title = ao ? obj_str(r, ao, n, "title", &ht) : (span_t){ 0 };
-                span_t desc = ao ? obj_str(r, ao, n, "description", &hd) : (span_t){ 0 };
-                span_t body = ao ? obj_str(r, ao, n, "body", &hb) : (span_t){ 0 };
-                r->art_title = ht && title.p ? span_dup(r, title) : NULL;
-                r->art_desc = hd && desc.p ? span_dup(r, desc) : NULL;
-                r->art_body = hb && body.p ? span_dup(r, body) : NULL;
+                span_t title = obj_str(r, ao, n, "title", &ht);
+                span_t desc = obj_str(r, ao, n, "description", &hd);
+                span_t body = obj_str(r, ao, n, "body", &hb);
+                if (ht < 0 || hd < 0 || hb < 0) return reply_err(r, 422);
+                if ((ht == 1 && !nonempty(title)) || (hd == 1 && !nonempty(desc)) ||
+                    (hb == 1 && !nonempty(body)))
+                    return reply_err(r, 422);
+                r->art_title = ht == 1 ? span_dup(r, title) : NULL;
+                r->art_desc = hd == 1 ? span_dup(r, desc) : NULL;
+                r->art_body = hb == 1 ? span_dup(r, body) : NULL;
                 pg_add(r, ST_ART_SEL, 1, (const char *[]){ span_dup(r, slug) });
                 r->cb = cb_art_sel;
                 pg_go(r);
