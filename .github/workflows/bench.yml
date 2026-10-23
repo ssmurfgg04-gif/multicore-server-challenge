@@ -54,8 +54,16 @@ jobs:
           setsid nohup bash start.sh > /tmp/server.log 2>&1 < /dev/null &
           for i in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:3000/api/tags && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/api/tags
+          echo "health-ok; process right now:"
+          pgrep -a conduit || echo "DEAD AT END OF START STEP"
       - name: loadgen build
-        run: (cd bench && go build -o /tmp/loadgen ./cmd/loadgen)
+        run: |
+          echo "process before go build:"
+          pgrep -a conduit || echo "DEAD BEFORE LOADGEN BUILD"
+          (cd bench && go build -o /tmp/loadgen ./cmd/loadgen)
+          echo "process after go build:"
+          pgrep -a conduit || echo "DEAD AFTER LOADGEN BUILD"
+          dmesg 2>/dev/null | grep -i -E "killed process|oom" | tail -3 || true
       - name: warm-up (300 users)
         run: /tmp/loadgen run -target http://127.0.0.1:3000 -users 300 -ramp 20s -measure 40s -articles 10000 -run-id warm-github -secret "$JWT_SECRET" -out /tmp/warm.json 2>&1 | tail -20
       - name: probe (${{ matrix.users }} users)
