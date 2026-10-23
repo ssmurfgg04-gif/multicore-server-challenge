@@ -51,7 +51,7 @@ jobs:
           DATABASE_URL="postgres://conduit:conduit@127.0.0.1:5432/conduit_dev" \
           JWT_SECRET=multicore-server-challenge HOST=0.0.0.0 PORT=3000 \
           THREADS=2 DB_READS=9 DB_WRITES=3 \
-          nohup bash start.sh > /tmp/server.log 2>&1 &
+          setsid nohup bash start.sh > /tmp/server.log 2>&1 < /dev/null &
           for i in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:3000/api/tags && break; sleep 1; done
           curl -sf http://127.0.0.1:3000/api/tags
       - name: loadgen build
