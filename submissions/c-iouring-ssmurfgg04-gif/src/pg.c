@@ -198,6 +198,7 @@ static void build_startup(buf_t *b)
 /* AuthenticationSASL: send client-first-message (bare "n,,n=,r=<nonce>") */
 static void send_client_first(pgconn_t *pc)
 {
+    TRACE("trace: pg %d client-first\n", pc->id);
     buf_t b;
     buf_init(&b);
     char payload[256];
@@ -236,6 +237,7 @@ static void parse_server_first(pgconn_t *pc, const char *msg, size_t n)
 /* client-final-message with proof */
 static void send_client_final(pgconn_t *pc)
 {
+    TRACE("trace: pg %d client-final\n", pc->id);
     buf_t b;
     buf_init(&b);
     const char *sf = pc->server_first;
@@ -395,6 +397,7 @@ void pg_connect(pgconn_t *pc)
 
 void pg_reconnect(pgconn_t *pc)
 {
+    TRACE("trace: pg %d reconnect (state=%d)\n", pc->id, pc->state);
     if (pc->fd >= 0) close(pc->fd);
     pc->fd = -1;
     pg_fail_all(pc);
@@ -579,6 +582,7 @@ static int pg_parse_msg(pgconn_t *pc)
     case 'E': { /* ErrorResponse: capture the SQLSTATE */
         const char *c = body, *e = body + blen;
         char sqlstate[6] = { 0 };
+        char emsg[160] = { 0 };
         while (c < e) {
             char field = *c++;
             if (!field) break;
@@ -586,8 +590,12 @@ static int pg_parse_msg(pgconn_t *pc)
             if (!z) break;
             if (field == 'C' && (size_t)(z - c) >= 5)
                 memcpy(sqlstate, c, 5);
+            if (field == 'M' && (size_t)(z - c) < sizeof emsg)
+                memcpy(emsg, c, (size_t)(z - c));
             c = z + 1;
         }
+        if (!r)
+            TRACE("trace: pg %d ErrorResponse %s: %s\n", pc->id, sqlstate, emsg);
         if (r && !r->failed) {
             r->failed = 1;
             memcpy(r->sqlstate, sqlstate, sizeof sqlstate);
@@ -626,6 +634,7 @@ static int pg_parse_msg(pgconn_t *pc)
         }
         break;
     default:
+        TRACE("trace: pg %d UNKNOWN MSG %c (len %u) -> dead\n", pc->id, type, len);
         pc->state = PGS_DEAD;
         return 1;
     }
@@ -653,6 +662,7 @@ void pg_on_readable(pgconn_t *pc)
         if (buf_reserve(&pc->in, want)) break;
         ssize_t n = recv(pc->fd, pc->in.p + pc->in.len, want, MSG_DONTWAIT);
         if (n > 0) {
+            TRACE("trace: pg %d recv %zd bytes\n", pc->id, n);
             pc->in.len += (uint32_t)n;
             if ((size_t)n < 16384) break;
             continue;
