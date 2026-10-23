@@ -28,5 +28,18 @@ jobs:
         run: bash seed/make-seed.sh --dev
       - name: install.sh
         run: sudo bash submissions/c-iouring-ssmurfgg04-gif/install.sh
+      - name: diagnostic (start server, probe, show trace)
+        run: |
+          (cd submissions/c-iouring-ssmurfgg04-gif && bash build.sh)
+          cd submissions/c-iouring-ssmurfgg04-gif
+          DATABASE_URL="postgres://conduit:conduit@127.0.0.1:5432/conduit_dev" \
+          JWT_SECRET=multicore-server-challenge HOST=127.0.0.1 PORT=3000 LOG=1 \
+          setsid nohup bash start.sh > /tmp/server.log 2>&1 < /dev/null &
+          sleep 2
+          curl -m 3 -v http://127.0.0.1:3000/api/tags 2>&1 | tail -12
+          echo "=== server log ==="
+          cat /tmp/server.log
+          pkill -f bin/conduit || true
+          sleep 1
       - name: build, start, test
         run: bash test/run.sh submissions/c-iouring-ssmurfgg04-gif

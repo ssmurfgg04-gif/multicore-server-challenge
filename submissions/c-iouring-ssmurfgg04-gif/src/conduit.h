@@ -177,6 +177,9 @@ void req_release(req_t *r);   /* arena + resp freed, struct back to freelist */
 
 /* ---------------------------------------------------------------- server */
 
+#define TRACE(...) do { if (g_trace) fprintf(stderr, __VA_ARGS__); } while (0)
+extern int g_trace;
+
 int srv_init(void);
 void srv_run(void);
 int srv_parse_db_url(const char *url);

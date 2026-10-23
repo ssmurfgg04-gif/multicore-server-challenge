@@ -63,6 +63,9 @@ typedef struct arena_chunk {
 
 cfg_t cfg;
 
+int g_trace;                /* LOG=1: log io_uring event flow */
+#define TRACE(...) do { if (g_trace) fprintf(stderr, __VA_ARGS__); } while (0)
+
 static worker_t g_workers[64];
 static int g_nworkers;
 static int g_epoll_forced;      /* --epoll: use the fallback on purpose */
@@ -597,6 +600,7 @@ static void conn_accept(worker_t *w, int fd)
         close(fd);
         return;
     }
+    TRACE("trace: accept fd=%d\n", fd);
     if (!conn_new(w, fd)) return;
     if (w->use_iouring) {
         struct io_uring_sqe *sqe = io_uring_get_sqe(&w->ring);
@@ -923,6 +927,7 @@ static void *worker_iouring(void *arg)
                 pg_poll_event(w, (int)(ud & 0xffffffff), res, cqe->flags);
             } else {
                 conn_t *c = conn_from_ud(w, ud);
+                TRACE("trace: conn cqe res=%d sending=%d\n", res, c ? c->sending : -1);
                 if (!c) continue;
                 if (res == -ECANCELED) continue;
                 if (res <= 0) {
@@ -959,6 +964,7 @@ static void *worker_iouring(void *arg)
 int srv_init(void)
 {
     signal(SIGPIPE, SIG_IGN);
+    g_trace = !!getenv("LOG");
     config_load();
     jwt_b64url_init();
     jwt_init(cfg.jwt_secret, strlen(cfg.jwt_secret));

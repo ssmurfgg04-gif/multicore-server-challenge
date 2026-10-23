@@ -609,6 +609,7 @@ static int pg_parse_msg(pgconn_t *pc)
          * mean the backend considers us authenticated. ServerSignature is
          * not verified: we are on loopback behind the challenge's own PG. */
         if (code == 0 || code == 12) pc->authed = 1;
+        TRACE("trace: pg %d auth code=%d\n", pc->id, code);
         break;
     }
     case 'Z': /* ReadyForQuery */
@@ -621,6 +622,7 @@ static int pg_parse_msg(pgconn_t *pc)
             pg_on_writable(pc);
         } else if (pc->state == PGS_PREP) {
             pc->state = PGS_READY;
+            TRACE("trace: pg %d READY\n", pc->id);
         }
         break;
     default:
