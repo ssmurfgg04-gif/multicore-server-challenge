@@ -201,10 +201,17 @@ static void send_client_first(pgconn_t *pc)
     TRACE("trace: pg %d client-first\n", pc->id);
     buf_t b;
     buf_init(&b);
-    char payload[256];
+    /* SASLInitialResponse: mechanism name, then the length-prefixed
+     * initial response "n,,n=,r=<nonce>" */
     random_nonce(pc->client_nonce_b64, sizeof pc->client_nonce_b64);
-    int n = snprintf(payload, sizeof payload, "n,,n=,r=%s", pc->client_nonce_b64);
-    wire_msg(&b, 'p', payload, (size_t)n);
+    char initial[128];
+    int n = snprintf(initial, sizeof initial, "n,,n=,r=%s", pc->client_nonce_b64);
+    size_t lenpos;
+    wire_start(&b, 'p', &lenpos);
+    put_cstr(&b, "SCRAM-SHA-256");
+    put_i32(&b, n);
+    buf_put(&b, initial, (size_t)n);
+    wire_finish(&b, lenpos);
     buf_put(&pc->out, b.p, b.len);
     buf_free(&b);
     pc->state = PGS_SASL_SENT;
