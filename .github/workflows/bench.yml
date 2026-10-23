@@ -68,9 +68,13 @@ jobs:
           jq '{users: .meta.users, rps: .merged.rps, pass: .merged.pass, lg_limited: .merged.lg_limited,
                p50_ms: .merged.p50_ms, p95_ms: .merged.p95_ms, p99_ms: .merged.p99_ms,
                errors: .merged.error_pct}' /tmp/results.json || cat /tmp/results.json | head -50
-      - name: server log on failure
-        if: failure()
-        run: tail -30 /tmp/server.log
+      - name: server log
+        if: always()
+        run: |
+          echo "=== server log (full) ==="
+          cat /tmp/server.log || true
+          echo "=== process check ==="
+          pgrep -a conduit || echo "server process NOT running"
       - name: upload results
         uses: actions/upload-artifact@v4
         with:
