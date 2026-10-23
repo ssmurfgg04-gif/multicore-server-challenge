@@ -129,12 +129,15 @@ req_t *req_new(worker_t *w)
     req_t *r = &n->r;
     memset(r, 0, sizeof *r);
     r->w = w;
+    r->released = 0;
     buf_init(&r->resp);
     return r;
 }
 
 void req_release(req_t *r)
 {
+    if (r->released) return; /* srv_reply owns the release; be idempotent */
+    r->released = 1;
     buf_free(&r->resp);
     arena_drain(r);
     req_node_t *n = (req_node_t *)r;

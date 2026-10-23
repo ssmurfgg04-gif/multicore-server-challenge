@@ -131,6 +131,7 @@ typedef struct req {
     int pending;                                /* handed to PG or bcrypt: not stuck */
     uint8_t tag_json[4096];                    /* serialized text[] param */
     int upd_password_flag;                      /* PUT user: a new password was set */
+    int released;                               /* req_release already ran */
 
     /* request line + routing targets (views into arena) */
     int method;                 /* M_GET / M_POST / M_PUT / M_DELETE */

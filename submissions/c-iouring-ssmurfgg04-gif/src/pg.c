@@ -350,10 +350,7 @@ static void pg_fail_all(pgconn_t *pc)
         req_t *next = r->q_next;
         r->failed = 1;
         r->pg = NULL;
-        worker_t *w = r->w;
-        r->cb(r);
-        req_release(r);
-        pg_fill(w);
+        r->cb(r);       /* replies or chains; srv_reply owns the release */
         r = next;
     }
     pc->q_head = pc->q_tail = NULL;
@@ -504,8 +501,7 @@ void pg_fifo_check(worker_t *w)
         w->fifo_head = r->fifo_next;
         if (!w->fifo_head) w->fifo_tail = NULL;
         r->failed = 1;
-        r->cb(r);
-        req_release(r);
+        r->cb(r);       /* replies or chains; srv_reply owns the release */
     }
 }
 
@@ -519,8 +515,7 @@ static void batch_complete(req_t *r)
     if (!pc->q_head) pc->q_tail = NULL;
     r->pg = NULL;
     worker_t *w = r->w;
-    r->cb(r);
-    req_release(r);
+    r->cb(r);       /* replies (srv_reply releases) or chains the request on */
     pg_fill(w);
 }
 
