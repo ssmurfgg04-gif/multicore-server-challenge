@@ -792,7 +792,7 @@ void pg_arm(pgconn_t *pc)
     struct io_uring_sqe *sqe = io_uring_get_sqe(&w->ring);
     if (!sqe) return;
     if (pc->state == PGS_CONNECTING)
-        io_uring_prep_poll_add(sqe, pc->fd, POLLOUT | POLLERR | POLLHUP);
+        io_uring_prep_poll_add(sqe, pc->fd, POLLOUT);
     else
         io_uring_prep_poll_multishot(sqe, pc->fd, POLLIN | POLLRDHUP | POLLERR | POLLHUP);
     io_uring_sqe_set_data64(sqe, UD_PG | (uint32_t)pc->id);
@@ -810,10 +810,14 @@ static void pg_poll_event(worker_t *w, int idx, int32_t res, unsigned flags)
         return;
     }
     if (pc->state == PGS_CONNECTING) {
-        pg_on_writable(pc); /* completes the connect, sends the startup */
+        if (res & POLLOUT) pg_on_writable(pc); /* completes the connect */
+        /* res without POLLOUT (spurious or error report): SO_ERROR decides */
+        else pg_on_writable(pc);
     } else {
-        pg_on_readable(pc); /* drain + advance + deliver batches */
-        if (pc->out_off < pc->out.len) pg_on_writable(pc); /* resume partial send */
+        if (res & (POLLIN | POLLHUP | POLLERR)) {
+            pg_on_readable(pc); /* drain + advance + deliver batches */
+            if (pc->out_off < pc->out.len) pg_on_writable(pc); /* resume partial send */
+        }
     }
     pg_arm(pc);
     (void)flags;

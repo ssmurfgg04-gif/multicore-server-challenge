@@ -677,6 +677,8 @@ void pg_on_writable(pgconn_t *pc)
         int err = 0;
         socklen_t elen = sizeof err;
         getsockopt(pc->fd, SOL_SOCKET, SO_ERROR, &err, &elen);
+        if (err == EINPROGRESS || err == EALREADY || err == EWOULDBLOCK)
+            return; /* connect still in flight: the poll will fire again */
         if (err) {
             pg_reconnect(pc);
             return;
