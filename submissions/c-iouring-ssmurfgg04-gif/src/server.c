@@ -771,39 +771,48 @@ static void ring_arm_all(worker_t *w)
     io_uring_prep_poll_add(sqe, w->tickfd, POLLIN);
     io_uring_sqe_set_data64(sqe, UD_TICK);
 
-    /* PG receive (single-shot recv into the staging buffer, re-armed) */
+    /* PG readiness: one-shot POLLOUT while connecting, multishot POLLIN live */
     for (int i = 0; i < w->npgs; i++) pg_arm(&w->pgs[i]);
 
     io_uring_submit(&w->ring);
 }
 
+/* io_uring: readiness polling for a PG connection. A connecting socket gets
+ * a one-shot POLLOUT (the connect completion); a live one gets multishot
+ * POLLIN. Sends stay synchronous (drain now, resume on the next poll event),
+ * so POLLOUT is never armed for live connections and cannot spin. */
 void pg_arm(pgconn_t *pc)
 {
     worker_t *w = pc->w;
     if (!w->use_iouring || pc->fd < 0 || pc->recv_armed) return;
     struct io_uring_sqe *sqe = io_uring_get_sqe(&w->ring);
     if (!sqe) return;
-    io_uring_prep_recv(sqe, pc->fd, pc->stage, sizeof pc->stage, 0);
+    if (pc->state == PGS_CONNECTING)
+        io_uring_prep_poll_add(sqe, pc->fd, POLLOUT | POLLERR | POLLHUP);
+    else
+        io_uring_prep_poll_multishot(sqe, pc->fd, POLLIN | POLLRDHUP | POLLERR | POLLHUP);
     io_uring_sqe_set_data64(sqe, UD_PG | (uint32_t)pc->id);
     pc->recv_armed = 1;
     io_uring_submit(&w->ring);
 }
 
-static void pg_recv_done(worker_t *w, int idx, int32_t n)
+static void pg_poll_event(worker_t *w, int idx, int32_t res, unsigned flags)
 {
     pgconn_t *pc = &w->pgs[idx];
     pc->recv_armed = 0;
-    if (n > 0) {
-        if (buf_reserve(&pc->in, (size_t)n)) { pg_reconnect(pc); pg_arm(pc); return; }
-        memcpy(pc->in.p + pc->in.len, pc->stage, (size_t)n);
-        pc->in.len += (uint32_t)n;
-        pg_advance_pgconn(pc);
-    } else if (n == -EAGAIN) {
-        /* spurious readiness */
-    } else {
+    if (res < 0 && res != -ECANCELED && res != -EAGAIN) {
         pg_reconnect(pc);
+        pg_arm(pc);
+        return;
+    }
+    if (pc->state == PGS_CONNECTING) {
+        pg_on_writable(pc); /* completes the connect, sends the startup */
+    } else {
+        pg_on_readable(pc); /* drain + advance + deliver batches */
+        if (pc->out_off < pc->out.len) pg_on_writable(pc); /* resume partial send */
     }
     pg_arm(pc);
+    (void)flags;
 }
 
 
@@ -911,7 +920,7 @@ static void *worker_iouring(void *arg)
                 io_uring_prep_poll_add(sqe, w->tickfd, POLLIN);
                 io_uring_sqe_set_data64(sqe, UD_TICK);
             } else if (UD_IS_PG(ud)) {
-                pg_recv_done(w, (int)(ud & 0xffffffff), res);
+                pg_poll_event(w, (int)(ud & 0xffffffff), res, cqe->flags);
             } else {
                 conn_t *c = conn_from_ud(w, ud);
                 if (!c) continue;
